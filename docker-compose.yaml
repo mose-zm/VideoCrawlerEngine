@@ -1,0 +1,59 @@
+version: '3.2'
+services:
+  mysql:
+    build:
+      context: ./deploy/mysql
+    ports:
+      - 3306:3306
+    volumes:
+      - ./mysql/conf:/etc/mysql/conf.d
+      - ./mysql/data:/var/lib/mysql
+      - ./mysql/log:/var/log/mysql
+
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    container_name: vce_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: admin
+
+  api:
+    build:
+      context: ./deploy/api
+      dockerfile: Dockerfile
+    ports:
+      - 2333:2333
+    volumes:
+      - ./www/code/api:/deeao/code
+      - ./www/data/api:/deeao/data
+      - ./www/logs/api:/deeao/logs
+    depends_on:
+      - mysql
+    container_name: vce_api
+
+  task:
+    build:
+      context: ./deploy/task
+      dockerfile: Dockerfile
+    ports:
+      - 2332:2332
+    volumes:
+      - ./vce/task:/deeao/code
+      - ./www/data/task:/deeao/data
+      - ./www/logs/task:/deeao/logs
+    depends_on:
+      - mysql
+    container_name: vce_task
+
+  script:
+    build:
+      context: ./deploy/script
+      dockerfile: Dockerfile
+    ports:
+      - 2331:2331
+    volumes:
+      - ./www/code/script:/deeao/code
+      - ./www/data/script:/deeao/data
+      - ./www/logs/script:/deeao/logs
+    depends_on:
+      - mysql
+    container_name: vce_script

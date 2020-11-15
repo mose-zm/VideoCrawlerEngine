@@ -13,8 +13,11 @@ class PipeStreamHandler:
         # 默认使用ascii编码对bytes进行解码，这只是默认，
         # 如果默认的编码无法处理，会根据对应的chardet进行识别处理。
         self.encoding = 'ascii'
+        # 修复\r不作为换行分隔符导致readline无法处理的问题。
         manual_patch(self.process.stdout, True)
         manual_patch(self.process.stderr, True)
+
+        self._loop = None
 
     @property
     def stdin(self):
@@ -28,33 +31,45 @@ class PipeStreamHandler:
     def stderr(self):
         return self.process.stderr
 
+    def interrupt_stop(self):
+        """ 中断"""
+
+    def kill(self):
+        """ """
+        self.process.kill()
+
+    def terminate(self):
+        self.process.terminate()
+
+    def feed_threadsafe(self, data):
+        """ 线程安全喂数据。"""
+        # return asyncio.run_coroutine_threadsafe(self.feed_data(data), self._loop).result()
+        return asyncio.run_coroutine_threadsafe(self.feed_data(data), self._loop)
+
     async def feed_data(self, data: Optional[bytes]):
+        """ 异步喂数据。"""
         self.stdin.write(data)
         await self.stdin.drain()
 
     async def _stream_handler(self, stream_id, line):
         raise NotImplementedError
 
-    async def run(self, input=None, close_after_feed=True, timeout=None):
+    async def run(self, input=None, close_stdin=True, timeout=None):
         async def _stream_reader(fd, stream_id):
             nonlocal stream_getter
-            try:
-                while True:
-                    line = await fd.readline()
-                    if isinstance(line, bytes):
-                        encoding = self.encoding
-                        try:
-                            line = line.decode(encoding)
-                        except UnicodeDecodeError:
-                            encoding = chardet.detect(line)['encoding']
-                            self.encoding = encoding
-                            line = line.decode(encoding)
-                    if not line:
-                        break
-                    await stream_getter.put((stream_id, line))
-            except:
-                from traceback import print_exc
-                print_exc()
+            while True:
+                line = await fd.readline()
+                if isinstance(line, bytes):
+                    encoding = self.encoding
+                    try:
+                        line = line.decode(encoding)
+                    except UnicodeDecodeError:
+                        encoding = chardet.detect(line)['encoding']
+                        self.encoding = encoding
+                        line = line.decode(encoding)
+                if not line:
+                    break
+                await stream_getter.put((stream_id, line))
             fd._transport.close()
             await stream_getter.put(None)
 
@@ -64,27 +79,32 @@ class PipeStreamHandler:
             while True:
                 data = await stream_getter.get()
                 if data is None:
-                    if _is_all_closed():
+                    if transport_is_closing():
                         break
                 else:
                     await self._stream_handler(*data)
 
-        def _is_all_closed():
+        def transport_is_closing():
             return (self.stdout._transport.is_closing() and
                     self.stderr._transport.is_closing())
 
-        if input:
-            await self.feed_data(input)
-        if close_after_feed:
-            self.stdin.close()
+        try:
+            self._loop = asyncio.get_running_loop()
 
-        stream_getter = asyncio.Queue()
-        return await asyncio.wait([
-            _stream_handler(),
-            _stream_reader(self.stdout, STREAM_OUT),
-            _stream_reader(self.stderr, STREAM_ERROR)],
-            timeout=timeout
-        )
+            if input:
+                await self.feed_data(input)
+            if close_stdin:
+                self.stdin.close()
+
+            stream_getter = asyncio.Queue()
+            return await asyncio.wait([
+                _stream_handler(),
+                _stream_reader(self.stdout, STREAM_OUT),
+                _stream_reader(self.stderr, STREAM_ERROR)],
+                timeout=timeout
+            )
+        finally:
+            self._loop = None
 
 
 def global_patch():

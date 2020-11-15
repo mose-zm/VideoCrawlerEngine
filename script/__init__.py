@@ -1,38 +1,49 @@
-
-from config import REGISTERED_SCRIPT, new_script_config, script_config
-from urllib.parse import urlparse
-import requests, bs4
-from uitls import split_name_version, utility_package
-from collections import defaultdict
-from contextmgr import context_dict
-import debugger as dbg
 import os
+from collections import defaultdict
+from urllib.parse import urlparse
+
+import bs4
+import requests
+
+from context import debugger as dbg
+from context.contextmgr import context_dict
+# from script import default_config, get_config, REGISTERED_SCRIPT
+from script.config import get_config, default_config, REGISTERED_SCRIPT, iter_config
+from utils.common import split_name_version
+
+
+# from . import supplied_utilities
+from utils.common import utility_package
+
+# 已编译的脚本仓库
+
+# 注册的域
+# 'example.com': 'name-version'
 
 
 class ScriptBaseClass(object):
-    name = None
+    name: str = None
 
     @classmethod
     def test(cls, url, rule=None, config=None, *args, **kwargs):
         """ 构建脚本调试环境，并调用脚本的run方法，
         最后返回由该脚本构成的脚本请求ScriptRequest。"""
-        from config import new_script_config, script_config
         from .base import ScriptBaseClass
-        from requester.request import script_request
-        from requester.base import enter_request_context
+        from requester import script_request
+        from requester import enter_requester_context
 
         class TestScript(cls, ScriptBaseClass):
             # 继承base.py基类
             pass
 
         if config is None:
-            config = script_config(TestScript.name) or new_script_config()
+            config = get_config(TestScript.name) or default_config()
 
         script = ScriptTask(TestScript, config)
         # 打开调试模式
-        # dbg.__set_debug__ = True
-        request = script_request(url, rule=rule, script=script)
-        with enter_request_context(request), dbg.run(context_dict()):
+        dbg.__set_debug__ = True
+        request = script_request(url, rule=rule, script_cls=script)
+        with enter_requester_context(request), dbg.run(context_dict()):
             dbg.start()
             result = request.end_request()
             dbg.task_done()
@@ -40,13 +51,9 @@ class ScriptBaseClass(object):
         return request
 
 
-# 已编译的脚本仓库
+# 脚本仓库
 repository = {}
-
-# 注册的域
-# 'example.com': 'name-version'
 registered_domains = defaultdict(list)
-
 
 # 提供给脚本的第三方库
 supplied_utilities = {
@@ -55,19 +62,20 @@ supplied_utilities = {
     'bs4': bs4,
     'dbg': dbg,
 }
+# 提供给脚本的第三方库
 supplied_utilities.update(utility_package)
 
 
 class ScriptTask:
     """ 脚本任务。 """
-    def __init__(self, script, config):
+    def __init__(self, script_cls, config=None):
         """
         :param
             script:     脚本类对象
             config:     脚本执行配置
         """
-        self.script_cls = script
-        self.config = config
+        self.script_cls = script_cls
+        self.config = config or default_config()
 
     def __call__(self, url, quality=None, **kwargs):
         script_cls = self.script_cls
@@ -112,7 +120,7 @@ class Scripts:
         self.name = name
         self.scripts = {}
         self._active = None
-        self.config = script_config(name) or new_script_config()
+        self.config = get_config(name) or default_config()
 
     @property
     def supported_domains(self):
@@ -131,7 +139,6 @@ class Scripts:
         script = self.scripts.get(version, None)
         if script is None:
             return None
-        # config = get_script_config(script.name) or new_script_config()
         return ScriptTask(script, dict(self.config))
 
     def install(self, script):
@@ -155,6 +162,9 @@ class Scripts:
 
     def __repr__(self):
         return '<Script %s==%s>' % (self.name, self.version)
+
+    def __iter__(self):
+        return iter(self.scripts.items())
 
 
 def validate_script(source_byte, key):
@@ -205,7 +215,7 @@ def compile_script(script_name, verify=True):
                     v.run.__globals__.update(scope)
                     # 域-脚本 映射。
                     for domain in v.supported_domains:
-                        registered_domains[domain.rstrip('/')].append('%s-%s' % (v.name, v.version))
+                        registered_domains[domain.rstrip('/')].append(f'{v.name}:{v.version}')
             except TypeError as e:
                 # 非继承ScriptBaseClass，跳过检测
                 continue
@@ -215,7 +225,7 @@ def compile_script(script_name, verify=True):
 def select_script(scripts):
     """ 该方法会返回列表中优先级最高的脚本。"""
     def latest_version(name_version):
-        return (script_config(split_name_version(name_version)[0]) or {'order': 0})['order']
+        return (get_config(split_name_version(name_version)[0]) or {'order': 0})['order']
     return max(scripts, key=latest_version)
 
 
@@ -264,7 +274,7 @@ def register(script_name, sha256_key):
         raise FileNotFoundError('在脚本目录script下未找到指定名称的脚本，请检查是否存在该文件。')
 
     if script_name in REGISTERED_SCRIPT:
-        raise PermissionError('该脚本已被注册，请不要重复注册。')
+        raise PermissionError('该脚本已注册，请不要重复注册。')
 
     REGISTERED_SCRIPT[script_name] = sha256_key
 
@@ -275,7 +285,7 @@ def init_scripts():
     # 初始化爬虫脚本基类
     compile_script('base.py', verify=False)
     # 更新base.py的默认使用版本
-    version = script_config('base')['active']
+    version = get_config('base')['active']
     try:
         version = float(version)
     except (TypeError, ValueError):
@@ -291,7 +301,7 @@ def init_scripts():
         compile_script(script, False)
 
     # 加载脚本配置
-    for k, v in script_config().items():
+    for k, v in iter_config().items():
         if k is None or k == 'null':
             continue
         script = repository.get(k, None)

@@ -2,7 +2,8 @@ import os
 import shutil
 from collections import defaultdict
 from functools import partial
-import debugger as dbg
+from utils.common import cat_a4f
+from context import debugger as dbg
 
 
 class TemporaryFile:
@@ -32,15 +33,14 @@ class TemporaryDir:
         self._history = defaultdict(partial(defaultdict, list))
 
     def mktemp(self, extension=''):
-        abcde = '-'.join(str(i) for i in dbg.abcde)
-        nameonly = f"{abcde}[{len(self._history)}].{dbg.glb.script['title']}"
+        nameonly = f"{cat_a4f(dbg.abcdef)}[{len(self._history[dbg.b][dbg.abcdef])}].{dbg.glb.script['title']}"
 
         filepath = os.path.realpath(os.path.join(
             self.tempdir,
             f'{nameonly}.{extension.lstrip(".")}'
         ))
         # fp = open(filepath, mode=mode, **kwargs)
-        self._history[dbg.b][dbg.abcde].append(filepath)
+        self._history[dbg.b][dbg.abcdef].append(filepath)
         if not os.path.isdir(self.tempdir):
             os.makedirs(self.tempdir)
         return TemporaryFile(filepath)

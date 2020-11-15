@@ -8,17 +8,24 @@ Version:    0.1
 License:    Apache-2.0
 ==================================
 """
-from requester import download, Optional, Option, ffmpeg
-from script import ScriptBaseClass, dbg
+from requester import download
+from requester.media import ffmpeg
+from requester import Optional, Option
+from script import ScriptBaseClass
+from context import debugger as dbg
+from urllib.parse import urljoin, urlsplit
+from requester.live import live_daemon
 import bs4
 import json
 import re
 
 reg_playinfo = re.compile(
-    r'<script>.*?window\.__playinfo__\s*=(?:[(?:\s/\*).*?(?:\*/)\s])*(.*?)</script>')
+    r'<script>.*?window\.__playinfo__\s*=(?:[(?:\s/\*).*?(?:\*/)\s])*(.*?)</script>'
+)
 
 reg_initial_state = re.compile(
-    r'<script>.*?window\.__INITIAL_STATE__\s*=(.*?);(\(function\s*\(\s*\)\s*\{.*?)?</script>')
+    r'<script>.*?window\.__INITIAL_STATE__\s*=(.*?);(\(function\s*\(\s*\)\s*\{.*?)?</script>'
+)
 
 dash_params = {
     'avid': None,
@@ -43,8 +50,9 @@ durl_params = {
 
 }
 
-headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/73.0.3683.103 Safari/537.36',
+HEADERS = {
+    'User-Agent': ('Mozilla/5.0 (Windows NT 6.1; Win64; x64) '
+                   'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/73.0.3683.103 Safari/537.36'),
     'Accept': '*/*',
     'Accept-Encoding': 'gzip, deflate, br',
     'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7',
@@ -53,7 +61,7 @@ headers = {
 
 class Bilibili(ScriptBaseClass):
     name = 'bilibili'
-    version = 0.1
+    version = '0.1'
     author = 'ZSAIM'
     created_date = '2020/03/05'
 
@@ -65,7 +73,12 @@ class Bilibili(ScriptBaseClass):
         self.html_parse = None
 
     def run(self):
-        html_res = self.request_get(self.url, headers=dict(headers))
+        splitresult = urlsplit(self.url)
+        scheme, netloc, path, query, fragment = splitresult
+        bvid = path.strip('/').split('/')[-1]
+        self.view_detail(bvid)
+
+        html_res = self.request_get(self.url, headers=dict(HEADERS))
         # 汇报处理情况。
         if html_res.status_code != 200:
             dbg.error('%s %s: %s' % (html_res.status_code, html_res.reason, html_res.url))
@@ -116,13 +129,36 @@ class Bilibili(ScriptBaseClass):
 
         dbg.upload(items=results)
 
+    def view_detail(self, bvid):
+        """
+        https://api.bilibili.com/x/web-interface/view/detail
+        Params:
+            bvid=
+            aid=
+            need_operation_card=
+            web_rm_repeat=
+            jsonp=
+            callback=
+        """
+        url = 'https://api.bilibili.com/x/web-interface/view/detail'
+        params = {
+            'bvid': bvid,
+            'aid': '',
+            'need_operation_card': 1,
+            'web_rm_repeat': '',
+            'jsonp': 'json'
+
+        }
+        resp = self.request_get(url=url, params=params, headers=dict(HEADERS))
+        resp.json()
+
     def api_playurl(self, request_params):
-        """ api: https://api.bilibili.com/x/player/playurl?
+        """ api: https://api.bilibili.com/x/player/playurl
         这一接口获得的视频资源属于
         """
-        optional_items = []
-        request_header = dict(headers)
-        request_header['Referer'] = self.url
+        options = []
+        headers = dict(HEADERS)
+        headers['Referer'] = self.url
         r = dict(dash_params)
         r.update(request_params)
         api_res = self.api_get('https://api.bilibili.com/x/player/playurl?', r)
@@ -133,13 +169,13 @@ class Bilibili(ScriptBaseClass):
         if dash:
             # audio 选项
             audio = Optional([
-                download(uri=audio['base_url'], headers=request_header)
+                download(uri=audio['base_url'], headers=headers)
                 for audio in dash['audio']
             ])
             # v
             time_length = data['timelength'] / 1000
             for v in dash['video']:
-                video_dl = download(uri=v['base_url'], headers=request_header)
+                video_dl = download(uri=v['base_url'], headers=headers)
                 item_req = ffmpeg.concat_av([video_dl, audio])
 
                 frame_rate = v['frame_rate'].split('/')
@@ -162,7 +198,7 @@ class Bilibili(ScriptBaseClass):
                 dbg.success('quality: %s\nresolution: %s x %s\nsize: %s\nurl: %s' % (
                     v['id'], v['width'], v['height'], size, v['base_url']
                 ))
-                optional_items.append(Option(item_req, descriptions=video_desc))
+                options.append(Option(item_req, descriptions=video_desc))
         # durl
         r = dict(durl_params)
         r.update(request_params)
@@ -170,15 +206,15 @@ class Bilibili(ScriptBaseClass):
         durl = api_res.get('data', {}).get('durl')
         if durl:
             for v in durl:
-                video_dl = download(uri=v['url'], headers=request_header)
+                video_dl = download(uri=v['url'], headers=headers)
                 item_req = video_dl
                 # 不需要合并操作使用none 方法, 或着接提交下载请求
                 dbg.success('quality: %s\nresolution: %s x %s\nsize: %s\nurl: %s' % (
                     request_params['qn'], 'unknown', 'unknown', v['size'], v['url']
                 ))
-                optional_items.append(Option(item_req, descriptions=v))
+                options.append(Option(item_req, descriptions=v))
 
-        return optional_items
+        return options
 
     def playlist(self, aid):
         """ api: https://api.bilibili.com/x/player/pagelist?aid=%s&jsonp=jsonp
@@ -223,9 +259,6 @@ class Bilibili(ScriptBaseClass):
         return initial_state
 
 
-re_live_neptune_is_my_waifu = re.compile(r'<script>\s*window\.__NEPTUNE_IS_MY_WAIFU__\s*=\s*({.*?})\s*</script>')
-
-
 class BilibiliLive(ScriptBaseClass):
     name = 'bilibili-live'
     version = 0.1
@@ -233,26 +266,130 @@ class BilibiliLive(ScriptBaseClass):
     created_date = '2020/06/19'
 
     supported_domains = ['live.bilibili.com']
-    quality_ranking = [10000, 400, 250, 150, 100, 0]
+    quality_ranking = [10000, 400, 250, 150, 100, 80, 0]
 
     def run(self):
-        html_res = self.request_get(self.url, headers=dict(headers))
-        # 汇报处理情况。
-        if html_res.status_code != 200:
-            dbg.error('%s %s: %s' % (html_res.status_code, html_res.reason, html_res.url))
-        else:
-            dbg.success('%s %s: %s' % (html_res.status_code, html_res.reason, html_res.url))
+        """__NEPTUNE_IS_MY_WAIFU__"""
 
-        re_result = re_live_neptune_is_my_waifu.search(html_res.text)
+        splitresult = urlsplit(self.url)
+        scheme, netloc, path, query, fragment = splitresult
+        room_id = path.strip('/')
+        if not room_id.isnumeric():
+            raise TypeError(f'url输入不正确，得到room_id为：{room_id}')
 
-        neptune_is_my_waifu = json.loads(re_result.group(1))
-        base_info = neptune_is_my_waifu['baseInfoRes']
+        # 获取直播间信息
+        self.live_room(room_id)
+
+        # 直播持久化取流
+        dbg.upload(item=live_daemon(
+            lambda: self.get_live(room_id)
+        ))
+
+    def live_room(self, room_id):
+        """ 直播间信息。"""
+        api = 'https://api.live.bilibili.com/xlive/web-room/v1/index/getInfoByRoom'
+        params = {
+            'room_id': room_id,
+        }
+        headers = dict(HEADERS)
+        headers.update({
+            'Referer': self.url
+        })
+
+        resp = self.request_get(api, params=params, headers=headers)
+        resp_json = resp.json()
+        data = resp_json['data']
+        room_info = data['room_info']
+        anchor_info = data['anchor_info']
         dbg.upload(
-            title=base_info['data']['title'],
+            title=room_info['title'],
+            uid=room_info['uid'],
+            live_start_time=room_info['live_start_time'],
+            area_name=room_info['area_name'],
 
+            upname=anchor_info['base_info']['uname']
         )
-        dbg.upload(items=[])
-        print(neptune_is_my_waifu)
+
+    def get_live(self, room_id):
+        """
+        api: https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?
+        Params:
+            room_id=910819
+            &protocol=0%2C1
+            &format=0%2C2
+            &codec=0
+            &qn=10000
+            &platform=web
+            &ptype=16
+        """
+        api = 'https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo'
+        params = {
+            'room_id': room_id,
+            'protocol': '0,1,2',
+            # 'format': '0,1,2',
+            'format': '0,1',
+            'codec': '0',
+            'qn': '10000',
+            'platform': 'web',
+            'ptype': '16'
+        }
+        headers = dict(HEADERS)
+        headers.update({
+            'Referer': self.url
+        })
+
+        resp = self.request_get(api, params=params, headers=headers)
+        resp_json = resp.json()
+        data = resp_json['data']
+        dbg.upload(
+            room_id=room_id,
+            live_status=data['live_status'],
+            live_time=data['live_time'],
+        )
+
+        # 直播状态
+        if data['live_status'] == 0:
+            # 未开播
+            raise ValueError('直播未开。')
+        elif data['live_status'] == 1:
+            # 已开播
+            pass
+        playurl_info = data['playurl_info']
+        playurl = playurl_info['playurl']
+        # streams = playurl['stream']
+
+        options = []
+        for stream in playurl['stream']:
+            for format in stream['format']:
+                format_name = format['format_name']
+                for codec in format['codec']:
+                    current_qn = codec['current_qn']
+                    qn_desc = [
+                        qn['desc']
+                        for qn in playurl['g_qn_desc'] if qn['qn'] == current_qn
+                    ][0]
+                    desc = {
+                        'format': format_name,
+                        'quality': qn_desc,
+                        'qn': current_qn,
+                    }
+
+                    uris = []
+                    for url_info in codec['url_info']:
+                        urlpath = codec['base_url'] + url_info['extra']
+                        url = urljoin(url_info['host'], urlpath)
+                        uris.append(url)
+
+                    # 都使用ffmpeg进行下载直播流
+                    options.append(Option(
+                        ffmpeg.m3u8download(
+                            uris.pop(),
+                            user_agent=HEADERS['User-Agent']
+                        ),
+                        descriptions=desc
+                    ))
+
+        return Optional(options)
 
 
 if __name__ == '__main__':
@@ -262,8 +399,11 @@ if __name__ == '__main__':
     # bilibili = Bilibili.test('https://www.bilibili.com/video/av91721893', 100)
     # bilibili = Bilibili.test('https://www.bilibili.com/video/BV167411E7Tn', 100)
     # bilibili = Bilibili.test('https://www.bilibili.com/video/BV1sK411p7vg', 100)
-    bilibili = Bilibili.test('https://www.bilibili.com/video/BV14p4y1D7r7', 100)
-    print(bilibili)
+    # bilibili = Bilibili.test('https://www.bilibili.com/video/BV14p4y1D7r7', 100)
+    # print(bilibili)
 
     # live = BilibiliLive.test('https://live.bilibili.com/910819', 100)
-    # print(live)
+    # live = BilibiliLive.test('https://live.bilibili.com/697', 100)
+    # live = BilibiliLive.test('https://live.bilibili.com/2523257', 100)
+    live = BilibiliLive.test('https://live.bilibili.com/4404024', 100)
+    print(live)

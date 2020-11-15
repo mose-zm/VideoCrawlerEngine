@@ -10,7 +10,7 @@ License:    Apache-2.0
 ==================================
 """
 
-from uitls import extract_cookies_str_to_jar
+from utils.common import extract_cookies_str_to_jar
 from script import ScriptBaseClass as BaseClass
 import requests
 
@@ -24,9 +24,9 @@ class ScriptBaseClass(BaseClass):
         version:            版本
         supported_domains:  支持的域
     """
-    name = 'base'
-    version = 0.0
-    author = 'ZSAIM'
+    name: str = 'base'
+    version: str = 'alpha'
+    author: str = 'ZSAIM'
     created_date = '2020/03/05'
     license = 'Apache-2.0'
 
@@ -51,6 +51,7 @@ class ScriptBaseClass(BaseClass):
         self.quality = quality
         # requests 会话。
         self.session = requests.session()
+        self.session.verify = False
         self.options = options
         self._init()
 
@@ -76,14 +77,7 @@ class ScriptBaseClass(BaseClass):
     def run(self):
         raise NotImplementedError
 
-    def quick_glance(self):
-        """ 快速粗略获取必要的数据。
-        至少上传数据:
-            title:  处理的标题
-        """
-        raise NotImplementedError
-
-    def api_get(self, url, request_params, otype='auto'):
+    def api_get(self, url, request_params, otype='json'):
         """ api json 请求。 """
         request_query = '&'.join(['%s=%s' % (k, v) for k, v in request_params.items()])
         request_url = url.rstrip('?') + '?' + request_query
@@ -96,7 +90,7 @@ class ScriptBaseClass(BaseClass):
         return resp.text
 
     def __repr__(self):
-        return '<CrawlerScript %s-%s>' % (self.name, self.version)
+        return '<ScriptBaseClass %s-%s>' % (self.name, self.version)
 
 
 if __name__ == '__main__':
